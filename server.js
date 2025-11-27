@@ -4,7 +4,6 @@ obj[h] = row[idx] || '';
 });
 return res.json({found: true, user: obj});
 }
-}
 return res.json({found: false});
 } catch (err) {
 console.error(err);
