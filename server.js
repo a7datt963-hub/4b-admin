@@ -7,18 +7,11 @@ import { google } from "googleapis";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS: عدل الأصل المسموح إذا احتجت
-app.use(cors({
-  origin: [
-    "https://fourb-admin.onrender.com", // إن استضفت الواجهة الأمامية هنا
-    "*", // للتجربة، يفضل تحديد النطاقات الفعلية لاحقًا
-  ]
-}));
+app.use(cors());
 app.use(bodyParser.json());
 
 // تهيئة Google Auth
 function getSheets() {
-  // تعديل المفتاح الخاص لإزالة \n المسطحة إذا كانت موجودة
   const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
@@ -37,14 +30,21 @@ function getSheets() {
   return { sheets, spreadsheetId };
 }
 
+// دالة تجيب اسم أول ورقة تلقائيًا
+async function getFirstSheetName(sheets, spreadsheetId) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  return meta.data.sheets[0].properties.title;
+}
+
+// جلب كل الصفوف
 async function getAllRows() {
   const { sheets, spreadsheetId } = getSheets();
+  const sheetName = await getFirstSheetName(sheets, spreadsheetId);
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: "profiles!A:H", // عدل اسم الورقة إذا كان مختلفًا
+    range: `${sheetName}!A:H`,
   });
-  const rows = res.data.values || [];
-  return rows;
+  return { rows: res.data.values || [], sheetName };
 }
 
 // تحويل صف إلى كائن مستخدم
@@ -64,15 +64,11 @@ function rowToUser(row) {
 // جلب كل المستخدمين
 app.get("/api/users", async (req, res) => {
   try {
-    const rows = await getAllRows();
+    const { rows } = await getAllRows();
     const header = rows[0] || [];
     const dataRows = rows.slice(1);
     const users = dataRows.map(rowToUser);
-    res.json({
-      header,
-      count: users.length,
-      users,
-    });
+    res.json({ header, count: users.length, users });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch users." });
@@ -83,7 +79,7 @@ app.get("/api/users", async (req, res) => {
 app.get("/api/users/:personalNumber", async (req, res) => {
   try {
     const target = String(req.params.personalNumber).trim();
-    const rows = await getAllRows();
+    const { rows } = await getAllRows();
     const dataRows = rows.slice(1);
     const idx = dataRows.findIndex(r => String(r[0]).trim() === target);
 
@@ -92,8 +88,7 @@ app.get("/api/users/:personalNumber", async (req, res) => {
     }
 
     const user = rowToUser(dataRows[idx]);
-    // رقم الصف في الشيت (باعتبار الصف الأول هو الهيدر)
-    const sheetRowNumber = idx + 2;
+    const sheetRowNumber = idx + 2; // الصف الفعلي في الشيت
     res.json({ user, sheetRowNumber });
   } catch (err) {
     console.error(err);
@@ -112,7 +107,7 @@ app.patch("/api/users/:personalNumber", async (req, res) => {
     }
 
     const { sheets, spreadsheetId } = getSheets();
-    const rows = await getAllRows();
+    const { rows, sheetName } = await getAllRows();
     const dataRows = rows.slice(1);
     const idx = dataRows.findIndex(r => String(r[0]).trim() === target);
 
@@ -123,28 +118,25 @@ app.patch("/api/users/:personalNumber", async (req, res) => {
     const sheetRowNumber = idx + 2;
 
     if (action === "ban_permanent") {
-      // LoginNumber -> 1
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `profiles!G${sheetRowNumber}`,
+        range: `${sheetName}!G${sheetRowNumber}`,
         valueInputOption: "RAW",
-        requestBody: { values: [[ "1" ]] },
+        requestBody: { values: [["1"]] },
       });
     } else if (action === "ban_temporary") {
-      // LoginNumber -> 2
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `profiles!G${sheetRowNumber}`,
+        range: `${sheetName}!G${sheetRowNumber}`,
         valueInputOption: "RAW",
-        requestBody: { values: [[ "2" ]] },
+        requestBody: { values: [["2"]] },
       });
     } else if (action === "upgrade_vip") {
-      // VIP -> "vip"
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `profiles!H${sheetRowNumber}`,
+        range: `${sheetName}!H${sheetRowNumber}`,
         valueInputOption: "RAW",
-        requestBody: { values: [[ "vip" ]] },
+        requestBody: { values: [["vip"]] },
       });
     }
 
