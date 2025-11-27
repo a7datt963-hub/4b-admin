@@ -147,6 +147,37 @@ app.patch("/api/users/:personalNumber", async (req, res) => {
   }
 });
 
+// شحن الرصيد
+app.post("/api/charge", async (req, res) => {
+  try {
+    const { personalNumber, amount } = req.body;
+    const { sheets, spreadsheetId } = getSheets();
+    const { rows, sheetName } = await getAllRows();
+    const dataRows = rows.slice(1);
+    const idx = dataRows.findIndex(r => String(r[0]).trim() === String(personalNumber).trim());
+
+    if (idx === -1) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const sheetRowNumber = idx + 2;
+    const currentBalance = parseFloat(dataRows[idx][5] || "0");
+    const newBalance = currentBalance + parseFloat(amount);
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!F${sheetRowNumber}`, // العمود F هو الرصيد
+      valueInputOption: "RAW",
+      requestBody: { values: [[String(newBalance)]] },
+    });
+
+    res.json({ ok: true, personalNumber, newBalance });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Charge failed." });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
