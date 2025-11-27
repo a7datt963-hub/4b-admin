@@ -16,53 +16,39 @@ app.use(express.json());
 app.use(cors());
 
 // إعدادات من البيئة
-const SHEET_ID = process.env.SHEET_ID || "162XC1wqWJbEtvjxTFVyxIwA8WWqDEEefFFr_ceQztM";
-const SHEET_NAME = process.env.SHEET_NAME || "Sheet1"; // عدّل الاسم حسب شيتك
-const GOOGLE_SA_KEY_JSON =
-  process.env.GOOGLE_SA_KEY_JSON ||
-  process.env.GOOGLESAKEYJSON ||
-  "";
+const SHEET_ID = process.env.SHEET_ID || "162XC1_wqWJbEtvjxTFVyxIwA8WWqDEEefFFr_ceQztM";
+const SHEET_NAME = process.env.SHEET_NAME || "profiles";
+const GOOGLE_SA_KEY_JSON = process.env.GOOGLE_SA_KEY_JSON || "";
 
 if (!GOOGLE_SA_KEY_JSON) {
   console.warn("تحذير: لم يتم ضبط GOOGLE_SA_KEY_JSON في المتغيرات البيئية.");
 }
 
-// التعامل مع اختلاف أسماء المفاتيح داخل JSON
-function normalizeServiceAccount(jsonStr) {
-  let obj;
+// تحويل النص مع محارف الهروب إلى JSON صالح
+function parseServiceAccount(jsonStr) {
   try {
-    obj = JSON.parse(jsonStr);
+    // أولاً نحول النص إلى كائن
+    const obj = JSON.parse(jsonStr);
+
+    // المفتاح الخاص قد يحتوي على \n كنص، نحوله إلى أسطر حقيقية
+    if (obj.private_key) {
+      obj.private_key = obj.private_key.replace(/\\n/g, "\n");
+    }
+
+    return obj;
   } catch (e) {
-    throw new Error("JSON الخدمة غير صالح");
+    throw new Error("JSON الخدمة غير صالح: " + e.message);
   }
-  // تطبيع المفاتيح إلى النموذج القياسي
-  const normalized = {
-    type: obj.type === "service_account" || obj.type === "serviceaccount" ? "service_account" : "service_account",
-    project_id: obj.project_id || obj.projectid,
-    private_key_id: obj.private_key_id || obj.privatekeyid,
-    private_key: obj.private_key || obj.privatekey,
-    client_email: obj.client_email || obj.clientemail,
-    client_id: obj.client_id || obj.clientid,
-    auth_uri: obj.auth_uri || obj.authuri,
-    token_uri: obj.token_uri || obj.tokenuri,
-    auth_provider_x509_cert_url:
-      obj.auth_provider_x509_cert_url || obj.authproviderx509certurl,
-    client_x509_cert_url:
-      obj.client_x509_cert_url || obj.clientx509certurl,
-    universe_domain: obj.universe_domain || obj.universedomain || "googleapis.com",
-  };
-  return normalized;
 }
 
-// إنشاء عميل Google
+// إنشاء عميل Google Sheets
 function getSheetsClient() {
-  const key = normalizeServiceAccount(GOOGLE_SA_KEY_JSON);
+  const key = parseServiceAccount(GOOGLE_SA_KEY_JSON);
   const auth = new google.auth.JWT(
     key.client_email,
     undefined,
     key.private_key,
-    ["https://www.googleapis.com/auth/spreadsheets"],
-    undefined
+    ["https://www.googleapis.com/auth/spreadsheets"]
   );
   return google.sheets({ version: "v4", auth });
 }
@@ -84,7 +70,7 @@ async function readAllRows() {
     headers.forEach((h, i) => {
       obj[h] = row[i] !== undefined ? row[i] : "";
     });
-    obj._rowNumber = idx + 2; // رقم الصف الفعلي (مع الهيدر)
+    obj._rowNumber = idx + 2;
     return obj;
   });
   return { headers, items };
@@ -93,20 +79,17 @@ async function readAllRows() {
 // البحث عن صف حسب personalNumber
 async function findByPersonalNumber(pn) {
   const { items } = await readAllRows();
-  const found = items.find((it) => String(it.personalNumber).trim() === String(pn).trim());
-  if (!found) return null;
-  return found;
+  return items.find((it) => String(it.personalNumber).trim() === String(pn).trim()) || null;
 }
 
-// تحديث خلية واحدة في صف محدد
+// تحديث خلية واحدة
 async function updateCell(rowNumber, columnName, value) {
   const sheets = getSheetsClient();
-  // جلب الهيدر لتحديد رقم العمود
   const { headers } = await readAllRows();
   const colIndex = headers.indexOf(columnName);
   if (colIndex === -1) throw new Error(`العمود ${columnName} غير موجود`);
   const colLetter = toColumnLetter(colIndex + 1);
-  const range = `${SHEET_NAME}!${colLetter}${rowNumber}:${colLetter}${rowNumber}`;
+  const range = `${SHEET_NAME}!${colLetter}${rowNumber}`;
   await sheets.spreadsheets.values.update({
     spreadsheetId: SHEET_ID,
     range,
@@ -130,13 +113,7 @@ function toColumnLetter(n) {
 app.get("/users", async (req, res) => {
   try {
     const { items } = await readAllRows();
-    // تحجيم البيانات للعرض الأساسي (الاسم + رقم الدخول)
-    const users = items.map((it) => ({
-      personalNumber: it.personalNumber || "",
-      name: it.name || "",
-      LoginNumber: it.LoginNumber || "",
-    }));
-    res.json({ users });
+    res.json({ users: items });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -145,8 +122,7 @@ app.get("/users", async (req, res) => {
 // API: جلب مستخدم واحد
 app.get("/user/:personalNumber", async (req, res) => {
   try {
-    const pn = req.params.personalNumber;
-    const found = await findByPersonalNumber(pn);
+    const found = await findByPersonalNumber(req.params.personalNumber);
     if (!found) return res.status(404).json({ error: "Not found" });
     res.json(found);
   } catch (e) {
@@ -154,42 +130,31 @@ app.get("/user/:personalNumber", async (req, res) => {
   }
 });
 
-// API: حظر دائم/مؤقت عبر تعديل LoginNumber
+// API: تعديل LoginNumber
 app.post("/user/:personalNumber/block", async (req, res) => {
   try {
-    const pn = req.params.personalNumber;
-    const { value } = req.body;
-    if (value === undefined) return res.status(400).json({ error: "value مطلوب" });
-
-    const found = await findByPersonalNumber(pn);
+    const found = await findByPersonalNumber(req.params.personalNumber);
     if (!found) return res.status(404).json({ error: "Not found" });
-
-    await updateCell(found._rowNumber, "LoginNumber", String(value));
-    const updated = await findByPersonalNumber(pn);
+    await updateCell(found._rowNumber, "LoginNumber", String(req.body.value));
+    const updated = await findByPersonalNumber(req.params.personalNumber);
     res.json(updated);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// API: ترقية VIP
+// API: تعديل VIP
 app.post("/user/:personalNumber/vip", async (req, res) => {
   try {
-    const pn = req.params.personalNumber;
-    const { value } = req.body;
-    if (value === undefined) return res.status(400).json({ error: "value مطلوب" });
-
-    const found = await findByPersonalNumber(pn);
+    const found = await findByPersonalNumber(req.params.personalNumber);
     if (!found) return res.status(404).json({ error: "Not found" });
-
-    await updateCell(found._rowNumber, "VIP", String(value));
-    const updated = await findByPersonalNumber(pn);
+    await updateCell(found._rowNumber, "VIP", String(req.body.value));
+    const updated = await findByPersonalNumber(req.params.personalNumber);
     res.json(updated);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
-
 // صحّة السيرفر
 app.get("/", (req, res) => {
   res.json({ ok: true, service: "fourb-admin" });
