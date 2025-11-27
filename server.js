@@ -6,54 +6,41 @@ const cors = require('cors');
 const { google } = require('googleapis');
 
 const app = express();
-app.use(cors({ origin: true }));
+app.use(cors()); // غيّر origin إذا بدك تقيّد
 app.use(bodyParser.json());
 
-// =========================
-//  متغيرات البيئة
-// =========================
+// ------------ config from env ----------
 const SHEET_ID = process.env.SHEET_ID || '';
-let GOOGLE_SA_KEY_JSON = process.env.GOOGLE_SA_KEY_JSON || '';
+const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL || '';
+let GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY || '';
 
-if (!SHEET_ID) {
-  console.warn('Warning: SHEET_ID is not set in environment variables.');
-}
-if (!GOOGLE_SA_KEY_JSON) {
-  console.warn('Warning: GOOGLE_SA_KEY_JSON is not set in environment variables.');
-}
+// normalize private key: if it's escaped like "\\n" -> convert to real newlines
+GOOGLE_PRIVATE_KEY = GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n').trim();
 
-// =========================
-// إصلاح GOOGLE_SA_KEY_JSON
-// Render يضيف \\n ويكسر التنسيق
-// =========================
-try {
-  if (typeof GOOGLE_SA_KEY_JSON === 'string') {
-    // تحويل \n النصية إلى أسطر حقيقية
-    GOOGLE_SA_KEY_JSON = GOOGLE_SA_KEY_JSON.replace(/\\n/g, '\n');
+if (!SHEET_ID) console.warn('⚠ SHEET_ID not provided in env');
+if (!GOOGLE_CLIENT_EMAIL) console.warn('⚠ GOOGLE_CLIENT_EMAIL not provided in env');
+if (!GOOGLE_PRIVATE_KEY) console.warn('⚠ GOOGLE_PRIVATE_KEY not provided in env');
 
-    // ثم نعمل Parse
-    GOOGLE_SA_KEY_JSON = JSON.parse(GOOGLE_SA_KEY_JSON);
-  }
-} catch (err) {
-  console.error('Failed to parse GOOGLE_SA_KEY_JSON:', err);
-}
-
-// =========================
-// Google Auth
-// =========================
-const auth = new google.auth.GoogleAuth({
-  credentials: GOOGLE_SA_KEY_JSON,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
-
+// helper: get authenticated sheets client (uses JWT)
 async function getSheetsClient() {
-  const client = await auth.getClient();
-  return google.sheets({ version: 'v4', auth: client });
+  if (!GOOGLE_CLIENT_EMAIL || !GOOGLE_PRIVATE_KEY) {
+    throw new Error('Google service account credentials are not configured (GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY).');
+  }
+
+  const jwtClient = new google.auth.JWT(
+    GOOGLE_CLIENT_EMAIL,
+    null,
+    GOOGLE_PRIVATE_KEY,
+    ['https://www.googleapis.com/auth/spreadsheets'],
+    null
+  );
+
+  // authorize (will throw if credentials invalid)
+  await jwtClient.authorize();
+  return google.sheets({ version: 'v4', auth: jwtClient });
 }
 
-// =========================
-// دالة لتحويل رقم عمود إلى حرف
-// =========================
+// helper: 0-based col index -> letter
 function colToLetter(col) {
   let s = '';
   while (col >= 0) {
@@ -63,99 +50,93 @@ function colToLetter(col) {
   return s;
 }
 
-// =========================
-// API: جلب كل المستخدمين
-// =========================
+// ---------- endpoints ----------
+
+// GET /users -> returns all rows as objects (headers from row 1)
 app.get('/users', async (req, res) => {
   try {
     if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
 
     const sheets = await getSheetsClient();
-    const r = await sheets.spreadsheets.values.get({
+    const result = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
       range: 'Sheet1!A:Z',
     });
 
-    const rows = r.data.values || [];
-    if (rows.length === 0) return res.json({ users: [], headers: [], counts: {} });
+    const rows = result.data.values || [];
+    if (!rows.length) return res.json({ users: [], headers: [], counts: {} });
 
     const headers = rows[0].map(h => (h || '').toString().trim());
     const users = [];
-
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       const obj = { __row: i + 1 };
-      headers.forEach((h, idx) => (obj[h] = row[idx] || ''));
+      headers.forEach((h, idx) => {
+        obj[h] = row[idx] !== undefined ? row[idx] : '';
+      });
       users.push(obj);
     }
 
     const counts = {};
-    for (const u of users) {
+    users.forEach(u => {
       const key = (u.LoginNumber || '0').toString();
       counts[key] = (counts[key] || 0) + 1;
-    }
+    });
 
     res.json({ users, headers, counts });
-
   } catch (err) {
-    console.error(err);
+    console.error('GET /users error:', err);
     res.status(500).json({ error: 'Failed to read sheet', details: err.message });
   }
 });
 
-// =========================
-// API: البحث عن مستخدم
-// =========================
+// GET /search?personalNumber=xxx
 app.get('/search', async (req, res) => {
-  const personal = (req.query.personalNumber || '').trim();
+  const personal = (req.query.personalNumber || '').toString().trim();
   if (!personal) return res.status(400).json({ error: 'personalNumber required' });
 
   try {
+    if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
+
     const sheets = await getSheetsClient();
-    const r = await sheets.spreadsheets.values.get({
+    const result = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
       range: 'Sheet1!A:Z',
     });
 
-    const rows = r.data.values || [];
+    const rows = result.data.values || [];
     if (rows.length < 1) return res.json({ found: false });
 
     const headers = rows[0];
-
     for (let i = 1; i < rows.length; i++) {
-      if ((rows[i][0] || '').toString() === personal) {
-        const rowNumber = i + 1;
-        const obj = { __row: rowNumber };
-        headers.forEach((h, idx) => (obj[h] = rows[i][idx] || ''));
+      const row = rows[i];
+      if ((row[0] || '').toString() === personal) {
+        const obj = { __row: i + 1 };
+        headers.forEach((h, idx) => (obj[h] = row[idx] || ''));
         return res.json({ found: true, user: obj });
       }
     }
-
     res.json({ found: false });
-
   } catch (err) {
-    console.error(err);
+    console.error('GET /search error:', err);
     res.status(500).json({ error: 'Search failed', details: err.message });
   }
 });
 
-// =========================
-// تحديث خلية بناءً على اسم عمود
-// =========================
+// helper update single cell by header name and row number
 async function updateCellByHeader(headerName, rowNumber, newValue) {
+  if (!SHEET_ID) throw new Error('SHEET_ID not configured');
   const sheets = await getSheetsClient();
-  const r = await sheets.spreadsheets.values.get({
+  const hdrsRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: 'Sheet1!1:1',
   });
-
-  const headers = r.data.values[0] || [];
-  const colIndex = headers.findIndex(h => (h || '').trim() === headerName);
+  const hdrs = (hdrsRes.data.values && hdrsRes.data.values[0]) || [];
+  const colIndex = hdrs.findIndex(h => (h || '').toString().trim() === headerName);
   if (colIndex === -1) throw new Error('Header not found: ' + headerName);
 
   const colLetter = colToLetter(colIndex);
   const range = `Sheet1!${colLetter}${rowNumber}`;
-
   await sheets.spreadsheets.values.update({
     spreadsheetId: SHEET_ID,
     range,
@@ -164,22 +145,18 @@ async function updateCellByHeader(headerName, rowNumber, newValue) {
   });
 }
 
-// =========================
-// set-login
-// =========================
+// POST /action/set-login { personalNumber, loginValue }
 app.post('/action/set-login', async (req, res) => {
-  const { personalNumber, loginValue } = req.body;
+  const { personalNumber, loginValue } = req.body || {};
   if (!personalNumber) return res.status(400).json({ error: 'personalNumber required' });
+  if (loginValue === undefined) return res.status(400).json({ error: 'loginValue required' });
 
   try {
+    if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
+
     const sheets = await getSheetsClient();
-    const r = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:Z',
-    });
-
-    const rows = r.data.values || [];
-
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Sheet1!A:Z' });
+    const rows = result.data.values || [];
     for (let i = 1; i < rows.length; i++) {
       if ((rows[i][0] || '') == personalNumber) {
         const rowNumber = i + 1;
@@ -187,31 +164,24 @@ app.post('/action/set-login', async (req, res) => {
         return res.json({ ok: true, row: rowNumber });
       }
     }
-
     res.status(404).json({ error: 'personalNumber not found' });
-
   } catch (err) {
-    console.error(err);
+    console.error('POST /action/set-login error:', err);
     res.status(500).json({ error: 'update failed', details: err.message });
   }
 });
 
-// =========================
-// set-vip
-// =========================
+// POST /action/set-vip { personalNumber, vipValue }
 app.post('/action/set-vip', async (req, res) => {
-  const { personalNumber, vipValue } = req.body;
+  const { personalNumber, vipValue } = req.body || {};
   if (!personalNumber) return res.status(400).json({ error: 'personalNumber required' });
 
   try {
+    if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
+
     const sheets = await getSheetsClient();
-    const r = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:Z',
-    });
-
-    const rows = r.data.values || [];
-
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Sheet1!A:Z' });
+    const rows = result.data.values || [];
     for (let i = 1; i < rows.length; i++) {
       if ((rows[i][0] || '') == personalNumber) {
         const rowNumber = i + 1;
@@ -219,17 +189,13 @@ app.post('/action/set-vip', async (req, res) => {
         return res.json({ ok: true, row: rowNumber });
       }
     }
-
     res.status(404).json({ error: 'personalNumber not found' });
-
   } catch (err) {
-    console.error(err);
+    console.error('POST /action/set-vip error:', err);
     res.status(500).json({ error: 'update failed', details: err.message });
   }
 });
 
-// =========================
-// تشغيل السيرفر
-// =========================
+// start
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
