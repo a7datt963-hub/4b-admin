@@ -1,7 +1,6 @@
 {
   "name": "fourb-admin",
   "version": "1.0.0",
-  "description": "Admin dashboard for Google Sheets users",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
