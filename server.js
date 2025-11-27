@@ -60,7 +60,7 @@ app.get('/users', async (req, res) => {
     const sheets = await getSheetsClient();
     const result = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:Z',
+      range: 'profiles!A:Z',
     });
 
     const rows = result.data.values || [];
@@ -101,7 +101,7 @@ app.get('/search', async (req, res) => {
     const sheets = await getSheetsClient();
     const result = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:Z',
+      range: 'profiles!A:Z',
     });
 
     const rows = result.data.values || [];
@@ -129,14 +129,14 @@ async function updateCellByHeader(headerName, rowNumber, newValue) {
   const sheets = await getSheetsClient();
   const hdrsRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: 'Sheet1!1:1',
+    range: 'profiles!1:1',
   });
   const hdrs = (hdrsRes.data.values && hdrsRes.data.values[0]) || [];
   const colIndex = hdrs.findIndex(h => (h || '').toString().trim() === headerName);
   if (colIndex === -1) throw new Error('Header not found: ' + headerName);
 
   const colLetter = colToLetter(colIndex);
-  const range = `Sheet1!${colLetter}${rowNumber}`;
+  const range = `profiles!${colLetter}${rowNumber}`;
   await sheets.spreadsheets.values.update({
     spreadsheetId: SHEET_ID,
     range,
@@ -155,7 +155,7 @@ app.post('/action/set-login', async (req, res) => {
     if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
 
     const sheets = await getSheetsClient();
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Sheet1!A:Z' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'profiles!A:Z' });
     const rows = result.data.values || [];
     for (let i = 1; i < rows.length; i++) {
       if ((rows[i][0] || '') == personalNumber) {
@@ -180,7 +180,7 @@ app.post('/action/set-vip', async (req, res) => {
     if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
 
     const sheets = await getSheetsClient();
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'Sheet1!A:Z' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'profiles!A:Z' });
     const rows = result.data.values || [];
     for (let i = 1; i < rows.length; i++) {
       if ((rows[i][0] || '') == personalNumber) {
