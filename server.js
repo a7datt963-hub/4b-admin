@@ -41,7 +41,7 @@ async function getAllRows() {
   const { sheets, spreadsheetId } = getSheets();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: "Sheet1!A:H", // عدل اسم الورقة إذا كان مختلفًا
+    range: "profiles!A:H", // عدل اسم الورقة إذا كان مختلفًا
   });
   const rows = res.data.values || [];
   return rows;
@@ -126,7 +126,7 @@ app.patch("/api/users/:personalNumber", async (req, res) => {
       // LoginNumber -> 1
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `Sheet1!G${sheetRowNumber}`,
+        range: `profiles!G${sheetRowNumber}`,
         valueInputOption: "RAW",
         requestBody: { values: [[ "1" ]] },
       });
@@ -134,7 +134,7 @@ app.patch("/api/users/:personalNumber", async (req, res) => {
       // LoginNumber -> 2
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `Sheet1!G${sheetRowNumber}`,
+        range: `profiles!G${sheetRowNumber}`,
         valueInputOption: "RAW",
         requestBody: { values: [[ "2" ]] },
       });
@@ -142,7 +142,7 @@ app.patch("/api/users/:personalNumber", async (req, res) => {
       // VIP -> "vip"
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `Sheet1!H${sheetRowNumber}`,
+        range: `profiles!H${sheetRowNumber}`,
         valueInputOption: "RAW",
         requestBody: { values: [[ "vip" ]] },
       });
