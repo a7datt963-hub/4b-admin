@@ -1,201 +1,202 @@
-// server.js
-require('dotenv').config();
-const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-const { google } = require('googleapis');
+/**
+ * سيرفر REST للتعامل مع Google Sheets
+ * يعتمد على حساب خدمة Google وورقة تحتوي على الأعمدة:
+ * personalNumber, name, email, password, phone, balance, LoginNumber, VIP
+ */
+
+const express = require("express");
+const cors = require("cors");
+const { google } = require("googleapis");
+const dotenv = require("dotenv");
+
+dotenv.config();
 
 const app = express();
-app.use(cors()); // غيّر origin إذا بدك تقيّد
-app.use(bodyParser.json());
+app.use(express.json());
+app.use(cors());
 
-// ------------ config from env ----------
-const SHEET_ID = process.env.SHEET_ID || '';
-const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL || '';
-let GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY || '';
+// إعدادات من البيئة
+const SHEET_ID = process.env.SHEET_ID || "162XC1wqWJbEtvjxTFVyxIwA8WWqDEEefFFr_ceQztM";
+const SHEET_NAME = process.env.SHEET_NAME || "Sheet1"; // عدّل الاسم حسب شيتك
+const GOOGLE_SA_KEY_JSON =
+  process.env.GOOGLE_SA_KEY_JSON ||
+  process.env.GOOGLESAKEYJSON ||
+  "";
 
-// normalize private key: if it's escaped like "\\n" -> convert to real newlines
-GOOGLE_PRIVATE_KEY = GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n').trim();
-
-if (!SHEET_ID) console.warn('⚠ SHEET_ID not provided in env');
-if (!GOOGLE_CLIENT_EMAIL) console.warn('⚠ GOOGLE_CLIENT_EMAIL not provided in env');
-if (!GOOGLE_PRIVATE_KEY) console.warn('⚠ GOOGLE_PRIVATE_KEY not provided in env');
-
-// helper: get authenticated sheets client (uses JWT)
-async function getSheetsClient() {
-  if (!GOOGLE_CLIENT_EMAIL || !GOOGLE_PRIVATE_KEY) {
-    throw new Error('Google service account credentials are not configured (GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY).');
-  }
-
-  const jwtClient = new google.auth.JWT(
-    GOOGLE_CLIENT_EMAIL,
-    null,
-    GOOGLE_PRIVATE_KEY,
-    ['https://www.googleapis.com/auth/spreadsheets'],
-    null
-  );
-
-  // authorize (will throw if credentials invalid)
-  await jwtClient.authorize();
-  return google.sheets({ version: 'v4', auth: jwtClient });
+if (!GOOGLE_SA_KEY_JSON) {
+  console.warn("تحذير: لم يتم ضبط GOOGLE_SA_KEY_JSON في المتغيرات البيئية.");
 }
 
-// helper: 0-based col index -> letter
-function colToLetter(col) {
-  let s = '';
-  while (col >= 0) {
-    s = String.fromCharCode((col % 26) + 65) + s;
-    col = Math.floor(col / 26) - 1;
+// التعامل مع اختلاف أسماء المفاتيح داخل JSON
+function normalizeServiceAccount(jsonStr) {
+  let obj;
+  try {
+    obj = JSON.parse(jsonStr);
+  } catch (e) {
+    throw new Error("JSON الخدمة غير صالح");
+  }
+  // تطبيع المفاتيح إلى النموذج القياسي
+  const normalized = {
+    type: obj.type === "service_account" || obj.type === "serviceaccount" ? "service_account" : "service_account",
+    project_id: obj.project_id || obj.projectid,
+    private_key_id: obj.private_key_id || obj.privatekeyid,
+    private_key: obj.private_key || obj.privatekey,
+    client_email: obj.client_email || obj.clientemail,
+    client_id: obj.client_id || obj.clientid,
+    auth_uri: obj.auth_uri || obj.authuri,
+    token_uri: obj.token_uri || obj.tokenuri,
+    auth_provider_x509_cert_url:
+      obj.auth_provider_x509_cert_url || obj.authproviderx509certurl,
+    client_x509_cert_url:
+      obj.client_x509_cert_url || obj.clientx509certurl,
+    universe_domain: obj.universe_domain || obj.universedomain || "googleapis.com",
+  };
+  return normalized;
+}
+
+// إنشاء عميل Google
+function getSheetsClient() {
+  const key = normalizeServiceAccount(GOOGLE_SA_KEY_JSON);
+  const auth = new google.auth.JWT(
+    key.client_email,
+    undefined,
+    key.private_key,
+    ["https://www.googleapis.com/auth/spreadsheets"],
+    undefined
+  );
+  return google.sheets({ version: "v4", auth });
+}
+
+// قراءة كل البيانات
+async function readAllRows() {
+  const sheets = getSheetsClient();
+  const range = `${SHEET_NAME}!A:Z`;
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range,
+  });
+  const rows = res.data.values || [];
+  if (rows.length === 0) return { headers: [], items: [] };
+
+  const headers = rows[0];
+  const items = rows.slice(1).map((row, idx) => {
+    const obj = {};
+    headers.forEach((h, i) => {
+      obj[h] = row[i] !== undefined ? row[i] : "";
+    });
+    obj._rowNumber = idx + 2; // رقم الصف الفعلي (مع الهيدر)
+    return obj;
+  });
+  return { headers, items };
+}
+
+// البحث عن صف حسب personalNumber
+async function findByPersonalNumber(pn) {
+  const { items } = await readAllRows();
+  const found = items.find((it) => String(it.personalNumber).trim() === String(pn).trim());
+  if (!found) return null;
+  return found;
+}
+
+// تحديث خلية واحدة في صف محدد
+async function updateCell(rowNumber, columnName, value) {
+  const sheets = getSheetsClient();
+  // جلب الهيدر لتحديد رقم العمود
+  const { headers } = await readAllRows();
+  const colIndex = headers.indexOf(columnName);
+  if (colIndex === -1) throw new Error(`العمود ${columnName} غير موجود`);
+  const colLetter = toColumnLetter(colIndex + 1);
+  const range = `${SHEET_NAME}!${colLetter}${rowNumber}:${colLetter}${rowNumber}`;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range,
+    valueInputOption: "RAW",
+    requestBody: { values: [[value]] },
+  });
+}
+
+// تحويل رقم عمود إلى حرف
+function toColumnLetter(n) {
+  let s = "";
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
   }
   return s;
 }
 
-// ---------- endpoints ----------
-
-// GET /users -> returns all rows as objects (headers from row 1)
-app.get('/users', async (req, res) => {
+// API: جلب جميع المستخدمين
+app.get("/users", async (req, res) => {
   try {
-    if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
-
-    const sheets = await getSheetsClient();
-    const result = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'profiles!A:Z',
-    });
-
-    const rows = result.data.values || [];
-    if (!rows.length) return res.json({ users: [], headers: [], counts: {} });
-
-    const headers = rows[0].map(h => (h || '').toString().trim());
-    const users = [];
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      const obj = { __row: i + 1 };
-      headers.forEach((h, idx) => {
-        obj[h] = row[idx] !== undefined ? row[idx] : '';
-      });
-      users.push(obj);
-    }
-
-    const counts = {};
-    users.forEach(u => {
-      const key = (u.LoginNumber || '0').toString();
-      counts[key] = (counts[key] || 0) + 1;
-    });
-
-    res.json({ users, headers, counts });
-  } catch (err) {
-    console.error('GET /users error:', err);
-    res.status(500).json({ error: 'Failed to read sheet', details: err.message });
+    const { items } = await readAllRows();
+    // تحجيم البيانات للعرض الأساسي (الاسم + رقم الدخول)
+    const users = items.map((it) => ({
+      personalNumber: it.personalNumber || "",
+      name: it.name || "",
+      LoginNumber: it.LoginNumber || "",
+    }));
+    res.json({ users });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// GET /search?personalNumber=xxx
-app.get('/search', async (req, res) => {
-  const personal = (req.query.personalNumber || '').toString().trim();
-  if (!personal) return res.status(400).json({ error: 'personalNumber required' });
-
+// API: جلب مستخدم واحد
+app.get("/user/:personalNumber", async (req, res) => {
   try {
-    if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
-
-    const sheets = await getSheetsClient();
-    const result = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'profiles!A:Z',
-    });
-
-    const rows = result.data.values || [];
-    if (rows.length < 1) return res.json({ found: false });
-
-    const headers = rows[0];
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      if ((row[0] || '').toString() === personal) {
-        const obj = { __row: i + 1 };
-        headers.forEach((h, idx) => (obj[h] = row[idx] || ''));
-        return res.json({ found: true, user: obj });
-      }
-    }
-    res.json({ found: false });
-  } catch (err) {
-    console.error('GET /search error:', err);
-    res.status(500).json({ error: 'Search failed', details: err.message });
+    const pn = req.params.personalNumber;
+    const found = await findByPersonalNumber(pn);
+    if (!found) return res.status(404).json({ error: "Not found" });
+    res.json(found);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// helper update single cell by header name and row number
-async function updateCellByHeader(headerName, rowNumber, newValue) {
-  if (!SHEET_ID) throw new Error('SHEET_ID not configured');
-  const sheets = await getSheetsClient();
-  const hdrsRes = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: 'profiles!1:1',
-  });
-  const hdrs = (hdrsRes.data.values && hdrsRes.data.values[0]) || [];
-  const colIndex = hdrs.findIndex(h => (h || '').toString().trim() === headerName);
-  if (colIndex === -1) throw new Error('Header not found: ' + headerName);
-
-  const colLetter = colToLetter(colIndex);
-  const range = `profiles!${colLetter}${rowNumber}`;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SHEET_ID,
-    range,
-    valueInputOption: 'RAW',
-    requestBody: { values: [[newValue]] },
-  });
-}
-
-// POST /action/set-login { personalNumber, loginValue }
-app.post('/action/set-login', async (req, res) => {
-  const { personalNumber, loginValue } = req.body || {};
-  if (!personalNumber) return res.status(400).json({ error: 'personalNumber required' });
-  if (loginValue === undefined) return res.status(400).json({ error: 'loginValue required' });
-
+// API: حظر دائم/مؤقت عبر تعديل LoginNumber
+app.post("/user/:personalNumber/block", async (req, res) => {
   try {
-    if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
+    const pn = req.params.personalNumber;
+    const { value } = req.body;
+    if (value === undefined) return res.status(400).json({ error: "value مطلوب" });
 
-    const sheets = await getSheetsClient();
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'profiles!A:Z' });
-    const rows = result.data.values || [];
-    for (let i = 1; i < rows.length; i++) {
-      if ((rows[i][0] || '') == personalNumber) {
-        const rowNumber = i + 1;
-        await updateCellByHeader('LoginNumber', rowNumber, loginValue);
-        return res.json({ ok: true, row: rowNumber });
-      }
-    }
-    res.status(404).json({ error: 'personalNumber not found' });
-  } catch (err) {
-    console.error('POST /action/set-login error:', err);
-    res.status(500).json({ error: 'update failed', details: err.message });
+    const found = await findByPersonalNumber(pn);
+    if (!found) return res.status(404).json({ error: "Not found" });
+
+    await updateCell(found._rowNumber, "LoginNumber", String(value));
+    const updated = await findByPersonalNumber(pn);
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// POST /action/set-vip { personalNumber, vipValue }
-app.post('/action/set-vip', async (req, res) => {
-  const { personalNumber, vipValue } = req.body || {};
-  if (!personalNumber) return res.status(400).json({ error: 'personalNumber required' });
-
+// API: ترقية VIP
+app.post("/user/:personalNumber/vip", async (req, res) => {
   try {
-    if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
+    const pn = req.params.personalNumber;
+    const { value } = req.body;
+    if (value === undefined) return res.status(400).json({ error: "value مطلوب" });
 
-    const sheets = await getSheetsClient();
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'profiles!A:Z' });
-    const rows = result.data.values || [];
-    for (let i = 1; i < rows.length; i++) {
-      if ((rows[i][0] || '') == personalNumber) {
-        const rowNumber = i + 1;
-        await updateCellByHeader('VIP', rowNumber, vipValue || 'vip');
-        return res.json({ ok: true, row: rowNumber });
-      }
-    }
-    res.status(404).json({ error: 'personalNumber not found' });
-  } catch (err) {
-    console.error('POST /action/set-vip error:', err);
-    res.status(500).json({ error: 'update failed', details: err.message });
+    const found = await findByPersonalNumber(pn);
+    if (!found) return res.status(404).json({ error: "Not found" });
+
+    await updateCell(found._rowNumber, "VIP", String(value));
+    const updated = await findByPersonalNumber(pn);
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// start
+// صحّة السيرفر
+app.get("/", (req, res) => {
+  res.json({ ok: true, service: "fourb-admin" });
+});
+
+// التشغيل
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server listening on :${PORT}`);
+});
