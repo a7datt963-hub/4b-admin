@@ -6,10 +6,9 @@ const cors = require('cors');
 const { google } = require('googleapis');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: true })); // يسمح بالوصول من أي مكان (Render front-end)
 app.use(bodyParser.json());
 
-// اقرأ القيم من المتغيرات البيئية
 const SHEET_ID = process.env.SHEET_ID || '';
 let GOOGLE_SA_KEY_JSON = process.env.GOOGLE_SA_KEY_JSON || '';
 
@@ -20,7 +19,6 @@ if (!GOOGLE_SA_KEY_JSON) {
   console.warn('Warning: GOOGLE_SA_KEY_JSON is not set in environment variables.');
 }
 
-// حاول تحويل GOOGLE_SA_KEY_JSON من سلسلة إلى كائن JSON إن كانت متاحة كسلسلة
 try {
   if (typeof GOOGLE_SA_KEY_JSON === 'string' && GOOGLE_SA_KEY_JSON.trim().startsWith('{')) {
     GOOGLE_SA_KEY_JSON = JSON.parse(GOOGLE_SA_KEY_JSON);
@@ -28,7 +26,6 @@ try {
 } catch (err) {
   console.error('Failed to parse GOOGLE_SA_KEY_JSON environment variable. Make sure it is valid JSON string.');
   console.error(err);
-  // لا نوقف السيرفر هنا — لكن معظم العمليات التي تعتمد على Sheets سترجع خطأ عند الاستدعاء
 }
 
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
@@ -43,7 +40,6 @@ async function getSheetsClient() {
   return google.sheets({ version: 'v4', auth: client });
 }
 
-// helper: convert 0-based column index to letter (A, B, ... Z, AA, AB, ...)
 function colToLetter(col) {
   let s = '';
   while (col >= 0) {
@@ -53,7 +49,6 @@ function colToLetter(col) {
   return s;
 }
 
-// قراءة كامل الورقة (نفترض الصف الأول = headers)
 app.get('/users', async (req, res) => {
   try {
     if (!SHEET_ID) return res.status(500).json({ error: 'SHEET_ID not configured' });
@@ -71,14 +66,13 @@ app.get('/users', async (req, res) => {
     const users = [];
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      const obj = { __row: i + 1 }; // رقم الصف الفعلي في الشيت
+      const obj = { __row: i + 1 };
       headers.forEach((h, idx) => {
         obj[h] = row[idx] !== undefined ? row[idx] : '';
       });
       users.push(obj);
     }
 
-    // حساب المجموعات حسب LoginNumber
     const counts = {};
     users.forEach(u => {
       const key = (u.LoginNumber || '0').toString();
@@ -92,7 +86,6 @@ app.get('/users', async (req, res) => {
   }
 });
 
-// بحث حسب personalNumber (العمود الأول) — مطابقة تامة
 app.get('/search', async (req, res) => {
   const personal = (req.query.personalNumber || '').toString().trim();
   if (!personal) return res.status(400).json({ error: 'personalNumber required' });
@@ -126,7 +119,6 @@ app.get('/search', async (req, res) => {
   }
 });
 
-// تحديث خلية واحدة بحسب اسم العمود ورقم الصف
 async function updateCellByHeader(headerName, rowNumber, newValue) {
   if (!SHEET_ID) throw new Error('SHEET_ID not configured');
   const sheets = await getSheetsClient();
@@ -147,7 +139,6 @@ async function updateCellByHeader(headerName, rowNumber, newValue) {
   });
 }
 
-// endpoint لتغيير قيمة LoginNumber لرقم معرف معين
 app.post('/action/set-login', async (req, res) => {
   const { personalNumber, loginValue } = req.body || {};
   if (!personalNumber) return res.status(400).json({ error: 'personalNumber required' });
@@ -173,7 +164,6 @@ app.post('/action/set-login', async (req, res) => {
   }
 });
 
-// endpoint لتعيين VIP
 app.post('/action/set-vip', async (req, res) => {
   const { personalNumber, vipValue } = req.body || {};
   if (!personalNumber) return res.status(400).json({ error: 'personalNumber required' });
