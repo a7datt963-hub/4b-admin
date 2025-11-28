@@ -262,7 +262,7 @@ app.patch("/api/users/:personalNumber", async (req, res) => {
   }
 });
 
-// جلب الطلبات من العمود I
+// جلب الطلبات من العمود I (اسمه order)
 app.get('/api/orders-sheet', async (req,res)=>{
   try {
     if (!sheetsClient || !SPREADSHEET_ID) return res.json({ orders: [] });
@@ -284,7 +284,6 @@ app.post('/api/orders-update', async (req,res)=>{
     const { orderText, reply, status } = req.body;
     if (!orderText) return res.status(400).json({ ok:false, error:'missing orderText' });
 
-    // ابحث عن الصف الذي يحتوي الطلب
     const resp = await sheetsClient.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Profiles!I2:I10000'
@@ -293,7 +292,7 @@ app.post('/api/orders-update', async (req,res)=>{
     let foundRow = null;
     for (let i=0;i<rows.length;i++){
       if (rows[i][0] && rows[i][0].includes(orderText)) {
-        foundRow = i+2; // row index
+        foundRow = i+2;
         break;
       }
     }
