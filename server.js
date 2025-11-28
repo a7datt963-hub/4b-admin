@@ -177,7 +177,48 @@ app.post("/api/charge", async (req, res) => {
     res.status(500).json({ error: "Charge failed." });
   }
 });
+// تعديل بيانات المستخدم (أي خانة)
+app.put("/api/users/:personalNumber", async (req, res) => {
+  try {
+    const target = String(req.params.personalNumber).trim();
+    const updates = req.body; // { name, email, phone, password, balance, ... }
 
+    const { sheets, spreadsheetId } = getSheets();
+    const { rows, sheetName } = await getAllRows();
+    const dataRows = rows.slice(1);
+    const idx = dataRows.findIndex(r => String(r[0]).trim() === target);
+
+    if (idx === -1) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const sheetRowNumber = idx + 2;
+
+    // بناء القيم الجديدة حسب الأعمدة
+    const newRow = [
+      updates.personalNumber || dataRows[idx][0],
+      updates.name || dataRows[idx][1],
+      updates.email || dataRows[idx][2],
+      updates.password || dataRows[idx][3],
+      updates.phone || dataRows[idx][4],
+      updates.balance || dataRows[idx][5],
+      updates.LoginNumber || dataRows[idx][6],
+      updates.VIP || dataRows[idx][7],
+    ];
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!A${sheetRowNumber}:H${sheetRowNumber}`,
+      valueInputOption: "RAW",
+      requestBody: { values: [newRow] },
+    });
+
+    res.json({ ok: true, updated: newRow });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Update failed." });
+  }
+});
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
