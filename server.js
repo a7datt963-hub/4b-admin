@@ -262,53 +262,56 @@ app.patch("/api/users/:personalNumber", async (req, res) => {
   }
 });
 
-// جلب الطلبات من العمود I (اسمه order)
-app.get('/api/orders-sheet', async (req,res)=>{
+// جلب الطلبات من العمود I
+app.get("/api/orders", async (req, res) => {
   try {
-    if (!sheetsClient || !SPREADSHEET_ID) return res.json({ orders: [] });
-    const resp = await sheetsClient.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Profiles!I2:I10000'
-    });
-    const rows = (resp.data.values || []).map(r => r[0]).filter(v => v && v.trim() !== '');
-    res.json({ orders: rows });
-  } catch(e){
-    console.error('orders-sheet error', e);
-    res.status(500).json({ orders: [] });
+    const { sheets, spreadsheetId } = getSheets();
+    const { rows, sheetName } = await getAllRows();
+    const dataRows = rows.slice(1);
+    const orders = dataRows.map(r => r[8] || "").filter(o => o.trim() !== "");
+    res.json({ orders });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch orders." });
   }
 });
 
-// تحديث الطلب (إضافة الرد والحالة)
-app.post('/api/orders-update', async (req,res)=>{
+// الرد على الطلب (إضافة الرد + الحالة)
+app.post("/api/orders/respond", async (req, res) => {
   try {
-    const { orderText, reply, status } = req.body;
-    if (!orderText) return res.status(400).json({ ok:false, error:'missing orderText' });
+    const { orderText, reply, action } = req.body;
+    const { sheets, spreadsheetId } = getSheets();
+    const { rows, sheetName } = await getAllRows();
+    const dataRows = rows.slice(1);
 
-    const resp = await sheetsClient.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Profiles!I2:I10000'
-    });
-    const rows = resp.data.values || [];
-    let foundRow = null;
-    for (let i=0;i<rows.length;i++){
-      if (rows[i][0] && rows[i][0].includes(orderText)) {
-        foundRow = i+2;
-        break;
-      }
+    const idx = dataRows.findIndex(r => (r[8] || "").trim() === orderText.trim());
+    if (idx === -1) {
+      return res.status(404).json({ error: "Order not found." });
     }
-    if (!foundRow) return res.status(404).json({ ok:false, error:'order_not_found' });
 
-    const newVal = orderText + `\nالرد: ${reply||''}\nالحالة: ${status}`;
-    await sheetsClient.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `Profiles!I${foundRow}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [[ newVal ]] }
+    const sheetRowNumber = idx + 2;
+    let updatedOrder = orderText;
+
+    if (reply && reply.trim()) {
+      updatedOrder += `\nالرد: ${reply.trim()}`;
+    }
+    if (action === "accept") {
+      updatedOrder += `\nالحالة: تم قبول الطلب`;
+    } else if (action === "reject") {
+      updatedOrder += `\nالحالة: تم رفض الطلب`;
+    }
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!I${sheetRowNumber}`,
+      valueInputOption: "RAW",
+      requestBody: { values: [[updatedOrder]] },
     });
-    res.json({ ok:true });
-  } catch(e){
-    console.error('orders-update error', e);
-    res.status(500).json({ ok:false, error:e.message });
+
+    res.json({ ok: true, updatedOrder });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update order." });
   }
 });
 
