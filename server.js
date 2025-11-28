@@ -262,6 +262,57 @@ app.patch("/api/users/:personalNumber", async (req, res) => {
   }
 });
 
+// جلب الطلبات من العمود I
+app.get('/api/orders-sheet', async (req,res)=>{
+  try {
+    if (!sheetsClient || !SPREADSHEET_ID) return res.json({ orders: [] });
+    const resp = await sheetsClient.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Profiles!I2:I10000'
+    });
+    const rows = (resp.data.values || []).map(r => r[0]).filter(v => v && v.trim() !== '');
+    res.json({ orders: rows });
+  } catch(e){
+    console.error('orders-sheet error', e);
+    res.status(500).json({ orders: [] });
+  }
+});
+
+// تحديث الطلب (إضافة الرد والحالة)
+app.post('/api/orders-update', async (req,res)=>{
+  try {
+    const { orderText, reply, status } = req.body;
+    if (!orderText) return res.status(400).json({ ok:false, error:'missing orderText' });
+
+    // ابحث عن الصف الذي يحتوي الطلب
+    const resp = await sheetsClient.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Profiles!I2:I10000'
+    });
+    const rows = resp.data.values || [];
+    let foundRow = null;
+    for (let i=0;i<rows.length;i++){
+      if (rows[i][0] && rows[i][0].includes(orderText)) {
+        foundRow = i+2; // row index
+        break;
+      }
+    }
+    if (!foundRow) return res.status(404).json({ ok:false, error:'order_not_found' });
+
+    const newVal = orderText + `\nالرد: ${reply||''}\nالحالة: ${status}`;
+    await sheetsClient.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Profiles!I${foundRow}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [[ newVal ]] }
+    });
+    res.json({ ok:true });
+  } catch(e){
+    console.error('orders-update error', e);
+    res.status(500).json({ ok:false, error:e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
