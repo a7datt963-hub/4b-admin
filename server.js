@@ -219,6 +219,49 @@ app.put("/api/users/:personalNumber", async (req, res) => {
     res.status(500).json({ error: "Update failed." });
   }
 });
+
+// تحديث حالة المستخدم حسب الإجراء
+app.patch("/api/users/:personalNumber", async (req, res) => {
+  try {
+    const target = String(req.params.personalNumber).trim();
+    const action = req.body.action;
+
+    const { sheets, spreadsheetId } = getSheets();
+    const { rows, sheetName } = await getAllRows();
+    const dataRows = rows.slice(1);
+    const idx = dataRows.findIndex(r => String(r[0]).trim() === target);
+
+    if (idx === -1) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const sheetRowNumber = idx + 2;
+    const row = dataRows[idx];
+
+    if (action === "ban_permanent") {
+      row[6] = "1"; // LoginNumber = 1
+    } else if (action === "ban_temporary") {
+      row[6] = "2"; // LoginNumber = 2
+    } else if (action === "upgrade_vip") {
+      row[7] = "vip"; // VIP
+    } else if (action === "unban") {
+      row[6] = "3"; // LoginNumber = 3
+    }
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!A${sheetRowNumber}:H${sheetRowNumber}`,
+      valueInputOption: "RAW",
+      requestBody: { values: [row] },
+    });
+
+    res.json({ ok: true, updated: row });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Update failed." });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
